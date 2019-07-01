@@ -1,6 +1,6 @@
 {
   "name": "styled-deku-components",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "styled-components, but for Deku",
   "main": "dist/lib.js",
   "scripts": {
