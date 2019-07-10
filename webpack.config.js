@@ -1,9 +1,14 @@
-const HtmlWebPackPlugin = require('html-webpack-plugin')
+const path = require('path')
+const webpack = require('webpack')
 
 module.exports = {
-	entry: {
-    lib: './src/lib/index.js'
-  },
+	entry: './src/lib/index.js',
+	output: {
+   path: path.join(__dirname, 'dist'),
+   filename: 'index.js',
+   library: 'styled',
+	 libraryTarget: 'umd'
+	},
   module: {
     rules: [
       {
@@ -12,17 +17,20 @@ module.exports = {
         use: {
           loader: "babel-loader"
         }
-      }, {
-        test: /\.html$/,
-        use: [
-          {
-            loader: "html-loader"
-          }
-        ]
       }
     ]
   },
+	// externals: {
+	// 	deku: {
+	// 		commonjs: 'deku',
+	// 		commonjs2: 'deku',
+	// 		amd: 'deku',
+	// 		root: 'deku'
+	// 	}
+	// },
 	plugins: [
-
-  ]
+		new webpack.ProvidePlugin({
+		  dom: 'magic-virtual-element'
+		})
+	]
 }

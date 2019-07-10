@@ -1,54 +1,49 @@
-/** @jsx dom */
-import dom from 'magic-virtual-element'
 import stylis from 'stylis'
-import murmur from 'murmurhash-js'
-import equal from 'fast-equals'
-import events from 'deku/lib/events'
-import htmlAttributes from '../utils/html-attributes'
-import domElements from '../utils/dom-elements'
+import { deepEqual } from 'fast-equals'
+import events from '../assets/events'
+import htmlAttributes from '../assets/html-attributes'
+import domElements from '../assets/dom-elements'
+import config from './config'
+import {
+	createClassName,
+	generateAlphabeticName,
+	getInternalState,
+	hash,
+	setInternalState,
+	stringifyClasses
+} from './utils'
 
-const SEED = 'testing seed'
+const evaluateStyle = (strings, expressions, props, styledComponentId) => {
+	const handleFunctionExpression = functionExpression => {
+		if (functionExpression === false) return false
 
-let __internalState = {
-	counter: 0
-}
+		// might need a better way of solving this. functionExpression could be either 'props => props.someProp' or a nested component
+		// nested component takes {props} and style expression takes {...props}
+		// this is a compromise for now: {...props, props}
+		const result = functionExpression({...props, props})
 
-const getInternalState = property => property ? __internalState[property] : __internalState
+		if (typeof result === 'string') {
+			return result
+		}
 
-const setInternalState = nextState => {
-	__internalState = {
-		...__internalState,
-		...nextState
+		if (typeof result === 'object' && result.attributes.class) {
+			return `.${result.attributes.class.split(/\s/).join('.')}`
+		}
+
+		return false
 	}
-}
 
-const generateAlphabeticName = code => {
-	const charsLength = 52;
-	const getAlphabeticChar = code => String.fromCharCode(code + (code > 25 ? 39 : 97));
-	let name = '';
-	let x;
-
-	for (x = code; x > charsLength; x = Math.floor(x / charsLength)) {
-		name = getAlphabeticChar(x % charsLength) + name;
-	}
-
-	return getAlphabeticChar(x % charsLength) + name;
-};
-
-const hash = key => generateAlphabeticName(murmur(key, SEED));
-
-const createClassName = (componentId, style) => hash(componentId + style)
-
-const evaluateStyle = (strings, expressions, props, styledId) => {
 	const interpolated = strings
 		.map((string, i) => {
 			const expression = expressions[i]
 			const functionExpression = typeof expression === 'function' && expression
-			const objectExpression = typeof expression === 'object' && '.' + expression.styledId
+			const objectExpression = typeof expression === 'object' && `.${expression.styledComponentId}`
 			const stringExpression = typeof expression === 'string' && expression
 
+			const handledFunctionExpression = handleFunctionExpression(functionExpression)
+
 			const handledExpression = (
-				functionExpression && functionExpression(props) ||
+				handledFunctionExpression ||
 				objectExpression ||
 				stringExpression ||
 				''
@@ -58,7 +53,7 @@ const evaluateStyle = (strings, expressions, props, styledId) => {
 		})
 		.join('')
 
-	const className = '.' + createClassName(styledId, interpolated)
+	const className = `.${createClassName(styledComponentId, interpolated)}`
 
 	return {
 		css: stylis(className, interpolated),
@@ -84,8 +79,8 @@ const splitStyle = style => style
 	.filter(Boolean)
 	.map(string => string + '}')
 
-const injectStyle = (style, styledId) => {
-	const className = createClassName(styledId, style)
+const injectStyle = (style, styledComponentId) => {
+	const className = createClassName(styledComponentId, style)
 	const styleTag = getHeadStyleTag()
 	const styleSheet = styleTag.sheet
 	const rules = splitStyle(style)
@@ -95,7 +90,7 @@ const injectStyle = (style, styledId) => {
 			.split('.')
 			.map(string => string.trim())
 			.filter(Boolean)
-			.map(s => '.' + s)
+			.map(selector => `.${selector}`)
 
 		return selectors.includes(rule.selectorText)
 	})
@@ -105,20 +100,22 @@ const injectStyle = (style, styledId) => {
 	}
 }
 
-const evaluateAndInject = (strings, expressions, props, state, componentId, setState, isStatic) => {
-	if (isStatic && state.style) {
+const evaluateAndInject = (strings, expressions, props, state, styledComponentId, setState, isStatic) => {
+	if (isStatic && state[config.stateScope]) {
 		return false
 	}
 
-	const {css, interpolated} = evaluateStyle(strings, expressions, props, componentId)
+	const {css, interpolated} = evaluateStyle(strings, expressions, props, styledComponentId)
 
-	if (state.style !== interpolated) {
+	if (state[config.stateScope] !== interpolated) {
 		setState({
-			style: interpolated
+			[config.stateScope]: interpolated
 		})
 	}
 
-	injectStyle(css, componentId)
+	injectStyle(css, styledComponentId)
+
+	return css
 }
 
 const cleanProps = props => {
@@ -142,48 +139,73 @@ const cleanProps = props => {
 	return cleanedProps
 }
 
-const createStyledComponent = (elementName, strings, expressions, currentCount) => {
+const createStyledComponent = (elementName, options, strings, expressions, currentCount) => {
+	const Element = elementName
+	const isComponent = typeof Element !== 'string'
+	const isShorthandComponent = isComponent && typeof Element === 'function'
+	const isObjectComponent = isComponent && typeof Element === 'object'
 	const isStatic = expressions.length === 0
-	const componentId = 'sc-' + hash('sc' + currentCount)
+	const styledComponentId = `${config.prefix}-${hash(config.prefix + currentCount)}`
 
-	return {
+	const StyledComponent = {
+		// Styled component object properties
 		isStatic,
-		styledId: componentId,
-		shouldUpdate: ({props, state}, nextProps, nextState) => !equal(props, nextProps) || !equal(state, nextState),
-		afterMount: ({props, state}, el, setState) => evaluateAndInject(strings, expressions, props, state, componentId, setState, isStatic),
-		afterUpdate: ({props, state}, prevProps, prevState, setState) => evaluateAndInject(strings, expressions, props, state, componentId, setState, isStatic),
-		render: context => {
+		isStyledWrapper: true,
+		styledComponentId,
+
+		// Component lifecycle hooks
+		shouldUpdate: ({props, state}, nextProps, nextState) => {
+			if (props === nextProps && state === nextState) {
+				return false
+			}
+
+			return !deepEqual(props, nextProps) || !deepEqual(state, nextState)
+		},
+		afterMount: ({props, state}, el, setState) => {
+			evaluateAndInject(strings, expressions, props, state, styledComponentId, setState, isStatic)
+		},
+		afterUpdate: ({props, state}, prevProps, prevState, setState) => {
+			evaluateAndInject(strings, expressions, props, state, styledComponentId, setState, isStatic)
+		},
+		render: (context, setState) => {
 			const {props, state} = context
-			const Element = elementName
-			const isComponent = typeof Element !== 'string'
-			const className = createClassName(componentId, state.style)
-			const classes = [props.class, componentId, className]
+			const className = createClassName(styledComponentId, state[config.stateScope])
+			const propsClass = stringifyClasses(props.class)
+			const classString = [propsClass, styledComponentId, className]
 				.filter(Boolean)
 				.join(' ')
-
 			const cleanedProps = isComponent ? props : cleanProps(props)
 
 			return (
-				<Element {...cleanedProps} class={classes}>
+				<Element {...cleanedProps} class={classString}>
 					{props.children}
 				</Element>
 			)
 		}
 	}
+
+	return StyledComponent
 }
 
-const styled = elementName => (strings, ...expressions) => {
+const defaultOptions = {}
+
+const styled = (elementName, options = defaultOptions) => (strings, ...expressions) => {
 	const currentCount = getInternalState('counter') + 1
 
 	setInternalState({
 		counter: currentCount
 	})
 
-	return createStyledComponent(elementName, strings, expressions, currentCount)
+	return createStyledComponent(elementName, options, strings, expressions, currentCount)
 }
 
 domElements.forEach(domElement => {
 	styled[domElement] = styled(domElement)
 })
+
+export const cssProp = props => props.css && (
+	(typeof props.css === 'function' && props.css(props)) ||
+	(typeof props.css === 'string' && props.css)
+)
 
 export default styled
