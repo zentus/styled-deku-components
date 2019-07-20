@@ -20,14 +20,6 @@ module.exports = {
       }
     ]
   },
-	// externals: {
-	// 	deku: {
-	// 		commonjs: 'deku',
-	// 		commonjs2: 'deku',
-	// 		amd: 'deku',
-	// 		root: 'deku'
-	// 	}
-	// },
 	plugins: [
 		new webpack.ProvidePlugin({
 		  dom: 'magic-virtual-element'

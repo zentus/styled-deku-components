@@ -13,37 +13,16 @@ import {
 	stringifyClasses
 } from './utils'
 
-const evaluateStyle = (strings, expressions, props, styledComponentId) => {
-	const handleFunctionExpression = functionExpression => {
-		if (functionExpression === false) return false
-
-		// might need a better way of solving this. functionExpression could be either 'props => props.someProp' or a nested component
-		// nested component takes {props} and style expression takes {...props}
-		// this is a compromise for now: {...props, props}
-		const result = functionExpression({...props, props})
-
-		if (typeof result === 'string') {
-			return result
-		}
-
-		if (typeof result === 'object' && result.attributes.class) {
-			return `.${result.attributes.class.split(/\s/).join('.')}`
-		}
-
-		return false
-	}
-
-	const interpolated = strings
+const interpolateTemplate = (strings, expressions, props) => {
+	return strings
 		.map((string, i) => {
 			const expression = expressions[i]
 			const functionExpression = typeof expression === 'function' && expression
-			const objectExpression = typeof expression === 'object' && `.${expression.styledComponentId}`
+			const objectExpression = typeof expression === 'object' && expression.styledComponentId && `.${expression.styledComponentId}`
 			const stringExpression = typeof expression === 'string' && expression
 
-			const handledFunctionExpression = handleFunctionExpression(functionExpression)
-
 			const handledExpression = (
-				handledFunctionExpression ||
+				functionExpression && functionExpression(props) ||
 				objectExpression ||
 				stringExpression ||
 				''
@@ -52,7 +31,10 @@ const evaluateStyle = (strings, expressions, props, styledComponentId) => {
 			return `${string}${handledExpression}`
 		})
 		.join('')
+}
 
+const evaluateStyle = (strings, expressions, props, styledComponentId) => {
+	const interpolated = interpolateTemplate(strings, expressions, props)
 	const className = `.${createClassName(styledComponentId, interpolated)}`
 
 	return {
@@ -79,18 +61,21 @@ const splitStyle = style => style
 	.filter(Boolean)
 	.map(string => string + '}')
 
+const getSelectors = style => style
+	.replace(/({.+!?\.)|({.+})/gi, ' .')
+	.split('.')
+	.map(string => string.trim())
+	.filter(Boolean)
+	.map(selector => `.${selector}`)
+
 const injectStyle = (style, styledComponentId) => {
 	const className = createClassName(styledComponentId, style)
 	const styleTag = getHeadStyleTag()
 	const styleSheet = styleTag.sheet
 	const rules = splitStyle(style)
+
 	const ruleExists = Array.from(styleSheet.rules).find(rule => {
-		const selectors = style
-			.replace(/({.+!?\.)|({.+})/gi, ' .')
-			.split('.')
-			.map(string => string.trim())
-			.filter(Boolean)
-			.map(selector => `.${selector}`)
+		const selectors = getSelectors(style)
 
 		return selectors.includes(rule.selectorText)
 	})
@@ -101,15 +86,15 @@ const injectStyle = (style, styledComponentId) => {
 }
 
 const evaluateAndInject = (strings, expressions, props, state, styledComponentId, setState, isStatic) => {
-	if (isStatic && state[config.stateScope]) {
+	if (isStatic && state.interpolated) {
 		return false
 	}
 
 	const {css, interpolated} = evaluateStyle(strings, expressions, props, styledComponentId)
 
-	if (state[config.stateScope] !== interpolated) {
+	if (state.interpolated !== interpolated) {
 		setState({
-			[config.stateScope]: interpolated
+			interpolated
 		})
 	}
 
@@ -118,42 +103,36 @@ const evaluateAndInject = (strings, expressions, props, state, styledComponentId
 	return css
 }
 
-const cleanProps = props => {
+const getElementAttributes = props => {
 	const propKeys = Object.keys(props)
-	const eventKeys = Object.keys(events)
+	const eventNames = Object.keys(events)
+		.map(e => e.toLowerCase())
 
-	const filteredProps = propKeys.filter(propName => {
-		const lowerCasePropName = propName.toLowerCase()
-		const lowerCaseEventNames = eventKeys.map(e => e.toLowerCase())
+	return propKeys
+		.filter(_propName => {
+			const propName = _propName.toLowerCase()
 
-		return htmlAttributes.includes(lowerCasePropName) || lowerCaseEventNames.includes(lowerCasePropName)
-	})
-
-	const cleanedProps = filteredProps.reduce((acc, propName) => {
-		return {
-			...acc,
-			[propName]: props[propName]
-		}
-	}, {})
-
-	return cleanedProps
+			return htmlAttributes.includes(propName) || eventNames.includes(propName)
+		})
+		.reduce((acc, propName) => {
+			return {
+				...acc,
+				[propName]: props[propName]
+			}
+		}, {})
 }
 
 const createStyledComponent = (elementName, options, strings, expressions, currentCount) => {
 	const Element = elementName
 	const isComponent = typeof Element !== 'string'
-	const isShorthandComponent = isComponent && typeof Element === 'function'
-	const isObjectComponent = isComponent && typeof Element === 'object'
 	const isStatic = expressions.length === 0
 	const styledComponentId = `${config.prefix}-${hash(config.prefix + currentCount)}`
 
 	const StyledComponent = {
-		// Styled component object properties
-		isStatic,
-		isStyledWrapper: true,
 		styledComponentId,
-
-		// Component lifecycle hooks
+		afterMount: ({props, state}, el, setState) => {
+			evaluateAndInject(strings, expressions, props, state, styledComponentId, setState, isStatic)
+		},
 		shouldUpdate: ({props, state}, nextProps, nextState) => {
 			if (props === nextProps && state === nextState) {
 				return false
@@ -161,26 +140,23 @@ const createStyledComponent = (elementName, options, strings, expressions, curre
 
 			return !deepEqual(props, nextProps) || !deepEqual(state, nextState)
 		},
-		afterMount: ({props, state}, el, setState) => {
-			evaluateAndInject(strings, expressions, props, state, styledComponentId, setState, isStatic)
-		},
-		afterUpdate: ({props, state}, prevProps, prevState, setState) => {
-			evaluateAndInject(strings, expressions, props, state, styledComponentId, setState, isStatic)
-		},
 		render: (context, setState) => {
 			const {props, state} = context
-			const className = createClassName(styledComponentId, state[config.stateScope])
+			const className = createClassName(styledComponentId, state.interpolated)
 			const propsClass = stringifyClasses(props.class)
+			const propsOrAttributes = isComponent ? props : getElementAttributes(props)
 			const classString = [propsClass, styledComponentId, className]
 				.filter(Boolean)
 				.join(' ')
-			const cleanedProps = isComponent ? props : cleanProps(props)
 
 			return (
-				<Element {...cleanedProps} class={classString}>
+				<Element {...propsOrAttributes} class={classString}>
 					{props.children}
 				</Element>
 			)
+		},
+		afterUpdate: ({props, state}, prevProps, prevState, setState) => {
+			evaluateAndInject(strings, expressions, props, state, styledComponentId, setState, isStatic)
 		}
 	}
 
