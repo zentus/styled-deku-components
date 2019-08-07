@@ -29,9 +29,6 @@ export default [
   "crossorigin",
   "csp",
   "data",
-
-	// need to implement support for wildcard
-  "data-*",
   "datetime",
   "decoding",
   "default",

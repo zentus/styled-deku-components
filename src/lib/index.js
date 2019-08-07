@@ -96,9 +96,9 @@ const evaluateAndInject = (strings, expressions, props, state, styledComponentId
 		setState({
 			interpolated
 		})
-	}
 
-	injectStyle(css, styledComponentId)
+		injectStyle(css, styledComponentId)
+	}
 
 	return css
 }
@@ -112,7 +112,7 @@ const getElementAttributes = props => {
 		.filter(_propName => {
 			const propName = _propName.toLowerCase()
 
-			return htmlAttributes.includes(propName) || eventNames.includes(propName)
+			return htmlAttributes.includes(propName) || eventNames.includes(propName) || propName.includes('data-')
 		})
 		.reduce((acc, propName) => {
 			return {
