@@ -83,6 +83,8 @@ const injectStyle = (style, styledComponentId) => {
 	if (style && !ruleExists) {
 		rules.forEach(rule => styleSheet.insertRule(rule, 0))
 	}
+
+	return styleSheet
 }
 
 const evaluateAndInject = (strings, expressions, props, state, styledComponentId, setState, isStatic) => {
@@ -97,10 +99,13 @@ const evaluateAndInject = (strings, expressions, props, state, styledComponentId
 			interpolated
 		})
 
-		injectStyle(css, styledComponentId)
-	}
+		const styleSheet = injectStyle(css, styledComponentId)
 
-	return css
+		return {
+			interpolated,
+			styleSheet
+		}
+	}
 }
 
 const getElementAttributes = props => {
@@ -131,7 +136,17 @@ const createStyledComponent = (elementName, options, strings, expressions, curre
 	const StyledComponent = {
 		styledComponentId,
 		afterMount: ({props, state}, el, setState) => {
-			evaluateAndInject(strings, expressions, props, state, styledComponentId, setState, isStatic)
+			const {styleSheet, interpolated} = evaluateAndInject(strings, expressions, props, state, styledComponentId, setState, isStatic)
+			const className = createClassName(styledComponentId, interpolated)
+
+			setInterval(() => {
+				const foundInStyleSheet = Array.from(styleSheet.rules).find(rule => rule.selectorText.startsWith('.' + className))
+
+				if (foundInStyleSheet) {
+					setState({injected: true})
+				}
+
+			}, 1)
 		},
 		shouldUpdate: ({props, state}, nextProps, nextState) => {
 			if (props === nextProps && state === nextState) {
@@ -148,6 +163,10 @@ const createStyledComponent = (elementName, options, strings, expressions, curre
 			const classString = [propsClass, styledComponentId, className]
 				.filter(Boolean)
 				.join(' ')
+
+			if (!state.injected) {
+				return <noscript/>
+			}
 
 			return (
 				<Element {...propsOrAttributes} class={classString}>
